@@ -28,9 +28,10 @@ sClick = round(tPeak * app.fs) + 1;
 sClick = max(1, min(numel(app.env_dB), sClick));
 
 pkWin_ms = 1.0;
-pkWinS = max(1, round((pkWin_ms/1000)*app.fs));
+pkWinS   = max(1, round((pkWin_ms/1000) * app.fs));
 aPk = max(1, sClick - pkWinS);
 bPk = min(numel(app.env_dB), sClick + pkWinS);
+
 [~, iPk] = max(app.env_dB(aPk:bPk));
 sPk = aPk + iPk - 1;
 
@@ -51,9 +52,16 @@ if isfield(app.opts,'boundRefine_enable') && app.opts.boundRefine_enable
 end
 
 % Append to candidate pool + force keep
-app.state.calls_on_fixed(end+1)   = on;
-app.state.calls_off_fixed(end+1)  = off;
+app.state.calls_on_fixed(end+1)  = on;
+app.state.calls_off_fixed(end+1) = off;
 app.state.manualKeep_fixed(end+1) = true;
+
+% NEW: added calls are not "edited" yet, just explicitly kept
+if isfield(app.state,'manualEdited_fixed')
+    app.state.manualEdited_fixed(end+1) = false;
+else
+    app.state.manualEdited_fixed = false(numel(app.state.calls_on_fixed),1);
+end
 
 % Extend manual freq override arrays
 app.state.startFreq_manual_fixed_kHz(end+1) = NaN;
@@ -69,13 +77,18 @@ if isfield(app.state,'bwOk_fixed') && ~isempty(app.state.bwOk_fixed)
     if isfield(app.opts,'autoThr_minBandwidth_kHz')
         minBW = app.opts.autoThr_minBandwidth_kHz;
     end
+
     app.state.bwOk_fixed(end+1) = isfinite(bw) && (bw > minBW);
 end
 
 % Sort candidate pool and keep masks aligned
 [app.state.calls_on_fixed, ord] = sort(app.state.calls_on_fixed(:));
-app.state.calls_off_fixed  = app.state.calls_off_fixed(ord);
+app.state.calls_off_fixed = app.state.calls_off_fixed(ord);
 app.state.manualKeep_fixed = app.state.manualKeep_fixed(ord);
+
+if isfield(app.state,'manualEdited_fixed') && ~isempty(app.state.manualEdited_fixed)
+    app.state.manualEdited_fixed = app.state.manualEdited_fixed(ord);
+end
 
 if isfield(app.state,'bwOk_fixed') && ~isempty(app.state.bwOk_fixed)
     app.state.bwOk_fixed = app.state.bwOk_fixed(ord);
@@ -91,7 +104,8 @@ app.state.autoKeep_fixed = krgui.computeAutoKeepMask_v7( ...
     app.env_dB, app.noiseFloor_dB, app.state.thrAboveNoise_dB, ...
     app.state.calls_on_fixed, app.state.calls_off_fixed);
 
-[app.state.calls_on, app.state.calls_off, app.state.dispToFixed] = krgui.applyFilter_v7(app.state);
+[app.state.calls_on, app.state.calls_off, app.state.dispToFixed] = ...
+    krgui.applyFilter_v7(app.state);
 
 newFixedIdx = find(app.state.manualKeep_fixed, 1, 'last');
 newDispIdx  = find(app.state.dispToFixed == newFixedIdx, 1, 'first');
@@ -101,4 +115,5 @@ end
 
 guidata(mainFig, app);
 krgui.redrawAll_v7(mainFig);
+
 end

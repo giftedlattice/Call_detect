@@ -1,17 +1,24 @@
 function app = initState_v7(sig, fs, opts, meta)
 %INITSTATE_V7 Initialize analysis + detection + candidate pool. No UI here.
-% Auto-start threshold: baseline initThrAboveNoise_dB + optional bump to satisfy constraints.
+%
+% Auto-start threshold: baseline initThrAboveNoise_dB + optional bump to
+% satisfy constraints.
 %
 % IMPORTANT UPDATE:
-%   We compute a bandwidth validity mask (bwOk_fixed) for each candidate ONCE.
-%   This mask is always applied when building the working list, so bandwidth==0 calls vanish
-%   from GUI + export (unless user forces keep via manualKeep).
+% We compute a bandwidth validity mask (bwOk_fixed) for each candidate ONCE.
+% This mask is always applied when building the working list, so bandwidth==0
+% calls vanish from GUI + export unless user forces keep or manually edits.
 %
 % MANUAL FREQUENCY UPDATE:
-%   We now keep per-candidate manual start/end frequency overrides:
-%       state.startFreq_manual_fixed_kHz
-%       state.endFreq_manual_fixed_kHz
-%   These are NaN until user drags a spectrogram point.
+% We keep per-candidate manual start/end frequency overrides:
+%   state.startFreq_manual_fixed_kHz
+%   state.endFreq_manual_fixed_kHz
+% These are NaN until user drags a spectrogram point.
+%
+% MANUAL EDIT UPDATE:
+% We also keep a per-candidate manualEdited_fixed flag. If the user manually
+% changes time bounds, that call remains in the working list even if its
+% shortened bounds no longer pass the automatic bandwidth/threshold logic.
 
 rear  = sig(:,1);
 Nsamp = size(sig,1);
@@ -55,9 +62,9 @@ bwOk_fixed = computeBandwidthOkMask(rear, fs, cOn, cOff, opts, minBW);
 % Auto-start threshold (ADDITIVE constraints)
 % -------------------------------------------------------
 thrStart = opts.initThrAboveNoise_dB;
-
 if isfield(opts,'autoThr_enable') && opts.autoThr_enable && numel(cOn) >= 1
-    thrStart = bumpThresholdToSatisfyConstraints(env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, opts, thrStart);
+    thrStart = bumpThresholdToSatisfyConstraints( ...
+        env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, opts, thrStart);
 end
 
 % -------------------------------------------------------
@@ -72,15 +79,19 @@ state.calls_off_fixed = cOff;
 % Manual override per candidate (Toggle forces keep)
 state.manualKeep_fixed = false(numel(cOn),1);
 
-% Store bandwidth mask (always applied)
+% NEW: manual boundary edit flag per candidate
+state.manualEdited_fixed = false(numel(cOn),1);
+
+% Store bandwidth mask (always applied unless overridden by manual action)
 state.bwOk_fixed = bwOk_fixed;
 
-% NEW: manual frequency override arrays per fixed candidate
+% Manual frequency override arrays per fixed candidate
 state.startFreq_manual_fixed_kHz = nan(numel(cOn),1);
 state.endFreq_manual_fixed_kHz   = nan(numel(cOn),1);
 
 % Auto keep mask at START threshold (threshold-only; bw mask applied later)
-state.autoKeep_fixed = krgui.computeAutoKeepMask_v7(env_dB, noiseFloor_dB, thrStart, cOn, cOff);
+state.autoKeep_fixed = krgui.computeAutoKeepMask_v7( ...
+    env_dB, noiseFloor_dB, thrStart, cOn, cOff);
 
 % Working list (kept)
 [state.calls_on, state.calls_off, state.dispToFixed] = krgui.applyFilter_v7(state);
@@ -101,18 +112,22 @@ app.env_dB = env_dB;
 app.noiseFloor_dB = noiseFloor_dB;
 app.Nsamp = Nsamp;
 app.state = state;
+
 end
+
 
 % =====================================================================
 % Compute bandwidth OK mask once (candidate-level)
 % =====================================================================
 function bwOk = computeBandwidthOkMask(rear, fs, cOn, cOff, opts, minBW_kHz)
+
 N = numel(rear);
 bwOk = true(numel(cOn),1);
 
 for i = 1:numel(cOn)
     a = max(1, min(N, cOn(i)));
     b = max(1, min(N, cOff(i)));
+
     if b <= a
         bwOk(i) = false;
         continue;
@@ -120,20 +135,22 @@ for i = 1:numel(cOn)
 
     segR = rear(a:b);
     r = kr.feature_ridgeFreqs_v7(segR, fs, opts);
+    bw = r.max_kHz - r.min_kHz;   % ridge bandwidth across active bins
 
-    bw = r.max_kHz - r.min_kHz;  % ridge bandwidth across active bins
     bwOk(i) = isfinite(bw) && (bw > minBW_kHz);
 end
+
 end
+
 
 % =====================================================================
 % Bump threshold upward until constraints satisfied
 % =====================================================================
-function thrOut = bumpThresholdToSatisfyConstraints(env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, opts, thrBaseline)
+function thrOut = bumpThresholdToSatisfyConstraints( ...
+    env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, opts, thrBaseline)
 
 thrMax = opts.autoThr_searchMax_dB;
 step   = opts.autoThr_step_dB;
-
 thrOut = thrBaseline;
 
 if satisfiesConstraints(env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, thrOut, opts)
@@ -148,16 +165,19 @@ for thr = thrBaseline:step:thrMax
 end
 
 thrOut = thrMax;
+
 end
 
-function ok = satisfiesConstraints(env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, thrAboveNoise_dB, opts)
 
-autoKeep = krgui.computeAutoKeepMask_v7(env_dB, noiseFloor_dB, thrAboveNoise_dB, cOn, cOff);
+function ok = satisfiesConstraints( ...
+    env_dB, noiseFloor_dB, fs, cOn, cOff, bwOk_fixed, thrAboveNoise_dB, opts)
+
+autoKeep = krgui.computeAutoKeepMask_v7( ...
+    env_dB, noiseFloor_dB, thrAboveNoise_dB, cOn, cOff);
 
 % Apply bandwidth constraint as well for evaluating IPI
 keepMask = autoKeep & bwOk_fixed;
-
-onKept = cOn(keepMask);
+onKept   = cOn(keepMask);
 
 % ---- Constraint #1: min IPI
 okIPI = true;
@@ -173,4 +193,5 @@ if isfield(opts,'autoThr_noZeroBW_enable') && opts.autoThr_noZeroBW_enable
 end
 
 ok = okIPI && okBW;
+
 end
